@@ -9,6 +9,7 @@
 #include "mcp_server.h"
 #include "config.h"
 #include "power_save_timer.h"
+#include "ssid_manager.h"
 #include "axp2101.h"
 #include "i2c_device.h"
 
@@ -201,6 +202,11 @@ private:
                 return;
             }
             app.ToggleChatState();
+        });
+        boot_button_.OnLongPress([this]() {
+            ESP_LOGI(TAG, "Long press detected, clearing WiFi config and restarting");
+            SsidManager::GetInstance().Clear();
+            esp_restart();
         });
     }
 

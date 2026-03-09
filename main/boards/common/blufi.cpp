@@ -12,7 +12,7 @@
 #include "freertos/task.h"
 #include "wifi_manager.h"
 
-#define BLUFI_DEVICE_NAME "Xiaozhi-Blufi"
+#define BLUFI_DEVICE_NAME "turing-Blufi"
 
 #ifdef CONFIG_BT_BLUEDROID_ENABLED
 #include "esp_bt_device.h"
@@ -544,13 +544,22 @@ void Blufi::start_wifi_scan() {
 
     m_scan_in_progress = true;
 
+    // Disconnect any existing WiFi connection before scanning
+    esp_wifi_disconnect();
+
+    // Register scan event handler
+    esp_event_handler_instance_t scan_event_instance;
+    esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID,
+                                        &Blufi::_wifi_scan_event_handler, this,
+                                        &scan_event_instance);
+
     // Get current WiFi mode
     wifi_mode_t current_mode;
     esp_err_t err = esp_wifi_get_mode(&current_mode);
 
     if (current_mode == WIFI_MODE_AP) {
-        // If in AP mode, temporarily switch to APSTA to allow scanning
-        ESP_LOGI(BLUFI_TAG, "WiFi in AP mode");
+        // If in AP mode, switch to STA to allow scanning
+        ESP_LOGI(BLUFI_TAG, "WiFi in AP mode, switching to STA");
         err = esp_wifi_set_mode(WIFI_MODE_STA);
         if (err != ESP_OK) {
             ESP_LOGE(BLUFI_TAG, "Failed to set WiFi mode to STA: %s", esp_err_to_name(err));
@@ -564,29 +573,16 @@ void Blufi::start_wifi_scan() {
             m_scan_in_progress = false;
             return;
         }
-        // Register scan event handler
-        esp_event_handler_instance_t scan_event_instance;
-        esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID,
-                                            &Blufi::_wifi_scan_event_handler, this,
-                                            &scan_event_instance);
-
-        // Start scan
-        err = esp_wifi_scan_start(NULL, false);
-        if (err != ESP_OK) {
-            ESP_LOGE(BLUFI_TAG, "Failed to start WiFi scan: %s", esp_err_to_name(err));
-            m_scan_in_progress = false;
-            return;
-        }
-    } else if (current_mode == WIFI_MODE_STA) {
-        // Start scan
-        err = esp_wifi_scan_start(NULL, false);
-        if (err != ESP_OK) {
-            ESP_LOGE(BLUFI_TAG, "Failed to start WiFi scan: %s", esp_err_to_name(err));
-            m_scan_in_progress = false;
-            return;
-        }
-    } else {
+    } else if (current_mode != WIFI_MODE_STA) {
         ESP_LOGE(BLUFI_TAG, "Unexpected WiFi mode: %d", current_mode);
+        m_scan_in_progress = false;
+        return;
+    }
+
+    // Start scan
+    err = esp_wifi_scan_start(NULL, false);
+    if (err != ESP_OK) {
+        ESP_LOGE(BLUFI_TAG, "Failed to start WiFi scan: %s", esp_err_to_name(err));
         m_scan_in_progress = false;
         return;
     }

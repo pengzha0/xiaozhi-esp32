@@ -672,6 +672,9 @@ void AudioService::ResetDecoder() {
         esp_opus_dec_reset(opus_decoder_);
     }
     decoder_lock.unlock();
+    if (output_resampler_ != nullptr) {
+        esp_ae_rate_cvt_reset(output_resampler_);
+    }
     timestamp_queue_.clear();
     audio_decode_queue_.clear();
     audio_playback_queue_.clear();
