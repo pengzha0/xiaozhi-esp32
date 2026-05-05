@@ -48,6 +48,12 @@ private:
     int duration_ = 3000;
     float threshold_ = 0.2;
     std::deque<Command> commands_;
+
+    // EN 模型
+    esp_mn_iface_t* multinet_en_ = nullptr;
+    model_iface_data_t* multinet_en_data_ = nullptr;
+    char* mn_en_name_ = nullptr;
+    std::deque<Command> commands_en_;
  
     std::function<void(const std::string& wake_word)> wake_word_detected_callback_;
     AudioCodec* codec_ = nullptr;
@@ -65,6 +71,7 @@ private:
     std::condition_variable wake_word_cv_;
 
     void StoreWakeWordData(const std::vector<int16_t>& data);
+    void TriggerWakeWord(const std::string& wake_word_text);
     void ParseWakenetModelConfig();
 };
 

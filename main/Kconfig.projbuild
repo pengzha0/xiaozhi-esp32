@@ -702,14 +702,14 @@ endchoice
 
 config CUSTOM_WAKE_WORD
     string "Custom Wake Word"
-    default "xiao tu dou"
+    default "xiao hu xiao hu"
     depends on USE_CUSTOM_WAKE_WORD
     help
         Custom Wake Word, use pinyin for Chinese, separated by spaces
 
 config CUSTOM_WAKE_WORD_DISPLAY
     string "Custom Wake Word Display"
-    default "小土豆"
+    default "小虎小虎"
     depends on USE_CUSTOM_WAKE_WORD
     help
         Greeting sent to the server after wake word detection
@@ -721,6 +721,20 @@ config CUSTOM_WAKE_WORD_THRESHOLD
     depends on USE_CUSTOM_WAKE_WORD
     help
         Custom Wake Word Threshold, range 1-99, the smaller the more sensitive, default 20
+
+config CUSTOM_WAKE_WORD_2
+    string "Custom Wake Word 2 (English)"
+    default "hey tiger"
+    depends on USE_CUSTOM_WAKE_WORD
+    help
+        Second custom wake word for English, written in plain English words
+
+config CUSTOM_WAKE_WORD_2_DISPLAY
+    string "Custom Wake Word 2 Display"
+    default "Hey Tiger"
+    depends on USE_CUSTOM_WAKE_WORD
+    help
+        Display text for the second wake word
 
 config SEND_WAKE_WORD_DATA
     bool "Send Wake Word Data"

@@ -595,6 +595,12 @@ def read_custom_wake_word_from_sdkconfig(sdkconfig_path):
                 # Extract string value (remove quotes)
                 value = line.split('=', 1)[1].strip('"')
                 config_values['display'] = value
+            elif 'CONFIG_CUSTOM_WAKE_WORD_2=' in line and not line.startswith('#'):
+                value = line.split('=', 1)[1].strip('"')
+                config_values['wake_word_2'] = value
+            elif 'CONFIG_CUSTOM_WAKE_WORD_2_DISPLAY=' in line and not line.startswith('#'):
+                value = line.split('=', 1)[1].strip('"')
+                config_values['display_2'] = value
             elif 'CONFIG_CUSTOM_WAKE_WORD_THRESHOLD=' in line and not line.startswith('#'):
                 # Extract numeric value
                 value = line.split('=', 1)[1]
@@ -612,11 +618,15 @@ def read_custom_wake_word_from_sdkconfig(sdkconfig_path):
         'wake_word' in config_values and 
         'display' in config_values and 
         'threshold' in config_values):
-        return {
-            'wake_word': config_values['wake_word'],
-            'display': config_values['display'],
-            'threshold': config_values['threshold'] / 100.0  # Convert to decimal (20 -> 0.2)
-        }
+        result = {
+        'wake_word': config_values['wake_word'],
+        'display': config_values['display'],
+        'threshold': config_values['threshold'] / 100.0  # Convert to decimal (20 -> 0.2)
+    }
+    if 'wake_word_2' in config_values and 'display_2' in config_values:
+        result['wake_word_2'] = config_values['wake_word_2']
+        result['display_2'] = config_values['display_2']
+    return result
     
     return None
 
@@ -635,9 +645,11 @@ def get_language_from_multinet_models(multinet_models):
     
     has_cn = any(any(indicator in model for indicator in cn_indicators) for model in multinet_models)
     has_en = any(any(indicator in model for indicator in en_indicators) for model in multinet_models)
-    
-    # If both or neither, default to cn
-    if has_cn and not has_en:
+
+    # If both, return mixed; if only one, return that language; default to cn
+    if has_cn and has_en:
+        return 'mixed'
+    elif has_cn and not has_en:
         return 'cn'
     elif has_en and not has_cn:
         return 'en'
@@ -892,21 +904,43 @@ def main():
     if custom_wake_word_config and multinet_model_paths:
         # Determine language from multinet models
         language = get_language_from_multinet_models(multinet_model_names)
-        
+
+        has_en_model = any('_en' in m or 'en_' in m for m in multinet_model_names)
+
+        # Build commands list with language tags
+        commands = [
+            {
+                "command": custom_wake_word_config['wake_word'],
+                "text": custom_wake_word_config['display'],
+                "action": "wake",
+                "language": "cn"
+            }
+        ]
+
+        wake_word_2 = custom_wake_word_config.get('wake_word_2')
+        display_2 = custom_wake_word_config.get('display_2')
+        if wake_word_2 and display_2:
+            if not has_en_model:
+                print("Warning: CUSTOM_WAKE_WORD_2 configured but no EN multinet model selected.")
+                print("Enable CONFIG_SR_MN_EN_MULTINET7_QUANT in menuconfig to support English wake word.")
+            else:
+                commands.append({
+                    "command": wake_word_2,
+                    "text": display_2,
+                    "action": "wake",
+                    "language": "en"
+                })
+
         # Build multinet_model info structure
         multinet_model_info = {
             "language": language,
             "duration": 3000,  # Default duration in ms
             "threshold": custom_wake_word_config['threshold'],
-            "commands": [
-                {
-                    "command": custom_wake_word_config['wake_word'],
-                    "text": custom_wake_word_config['display'],
-                    "action": "wake"
-                }
-            ]
+            "commands": commands
         }
         print(f"  custom wake word: {custom_wake_word_config['wake_word']} ({custom_wake_word_config['display']})")
+        if wake_word_2 and display_2 and has_en_model:
+            print(f"  custom wake word 2: {wake_word_2} ({display_2})")
         print(f"  wake word language: {language}")
         print(f"  wake word threshold: {custom_wake_word_config['threshold']}")
     

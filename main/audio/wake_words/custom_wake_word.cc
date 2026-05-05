@@ -21,6 +21,11 @@ CustomWakeWord::~CustomWakeWord() {
         multinet_model_data_ = nullptr;
     }
 
+    if (multinet_en_data_ != nullptr && multinet_en_ != nullptr) {
+        multinet_en_->destroy(multinet_en_data_);
+        multinet_en_data_ = nullptr;
+    }
+
     if (wake_word_encode_task_stack_ != nullptr) {
         heap_caps_free(wake_word_encode_task_stack_);
     }
@@ -70,9 +75,16 @@ void CustomWakeWord::ParseWakenetModelConfig() {
                     cJSON* command_name = cJSON_GetObjectItem(command, "command");
                     cJSON* text = cJSON_GetObjectItem(command, "text");
                     cJSON* action = cJSON_GetObjectItem(command, "action");
+                    cJSON* lang = cJSON_GetObjectItem(command, "language");
                     if (cJSON_IsString(command_name) && cJSON_IsString(text) && cJSON_IsString(action)) {
-                        commands_.push_back({command_name->valuestring, text->valuestring, action->valuestring});
-                        ESP_LOGI(TAG, "Command: %s, Text: %s, Action: %s", command_name->valuestring, text->valuestring, action->valuestring);
+                        Command cmd = {command_name->valuestring, text->valuestring, action->valuestring};
+                        if (cJSON_IsString(lang) && strcmp(lang->valuestring, "en") == 0) {
+                            commands_en_.push_back(cmd);
+                            ESP_LOGI(TAG, "EN Command: %s, Text: %s", command_name->valuestring, text->valuestring);
+                        } else {
+                            commands_.push_back(cmd);
+                            ESP_LOGI(TAG, "CN Command: %s, Text: %s, Action: %s", command_name->valuestring, text->valuestring, action->valuestring);
+                        }
                     }
                 }
             }
@@ -85,6 +97,7 @@ void CustomWakeWord::ParseWakenetModelConfig() {
 bool CustomWakeWord::Initialize(AudioCodec* codec, srmodel_list_t* models_list) {
     codec_ = codec;
     commands_.clear();
+    commands_en_.clear();
 
     if (models_list == nullptr) {
         language_ = "cn";
@@ -92,6 +105,9 @@ bool CustomWakeWord::Initialize(AudioCodec* codec, srmodel_list_t* models_list) 
 #ifdef CONFIG_CUSTOM_WAKE_WORD
         threshold_ = CONFIG_CUSTOM_WAKE_WORD_THRESHOLD / 100.0f;
         commands_.push_back({CONFIG_CUSTOM_WAKE_WORD, CONFIG_CUSTOM_WAKE_WORD_DISPLAY, "wake"});
+#endif
+#ifdef CONFIG_CUSTOM_WAKE_WORD_2
+        commands_en_.push_back({CONFIG_CUSTOM_WAKE_WORD_2, CONFIG_CUSTOM_WAKE_WORD_2_DISPLAY, "wake"});
 #endif
     } else {
         models_ = models_list;
@@ -103,29 +119,54 @@ bool CustomWakeWord::Initialize(AudioCodec* codec, srmodel_list_t* models_list) 
         return false;
     }
 
-    // 初始化 multinet (命令词识别)
-    mn_name_ = esp_srmodel_filter(models_, ESP_MN_PREFIX, language_.c_str());
-    if (mn_name_ == nullptr) {
-        ESP_LOGW(TAG, "Language '%s' multinet not found, falling back to any multinet model", language_.c_str());
-        mn_name_ = esp_srmodel_filter(models_, ESP_MN_PREFIX, NULL);
-    }
-    if (mn_name_ == nullptr) {
-        ESP_LOGE(TAG, "Failed to initialize multinet, mn_name is nullptr");
-        ESP_LOGI(TAG, "Please refer to https://pcn7cs20v8cr.feishu.cn/wiki/CpQjwQsCJiQSWSkYEvrcxcbVnwh to add custom wake word");
-        return false;
+    bool any_initialized = false;
+
+    // 初始化 CN 模型
+    if (!commands_.empty()) {
+        mn_name_ = esp_srmodel_filter(models_, ESP_MN_PREFIX, ESP_MN_CHINESE);
+        if (mn_name_ == nullptr) {
+            ESP_LOGW(TAG, "CN multinet not found, falling back to any multinet model");
+            mn_name_ = esp_srmodel_filter(models_, ESP_MN_PREFIX, NULL);
+        }
+        if (mn_name_ != nullptr) {
+            multinet_ = esp_mn_handle_from_name(mn_name_);
+            multinet_model_data_ = multinet_->create(mn_name_, duration_);
+            multinet_->set_det_threshold(multinet_model_data_, threshold_);
+            esp_mn_commands_clear();
+            for (int i = 0; i < (int)commands_.size(); i++) {
+                esp_mn_commands_add(i + 1, commands_[i].command.c_str());
+            }
+            esp_mn_commands_update();
+            multinet_->print_active_speech_commands(multinet_model_data_);
+            ESP_LOGI(TAG, "CN multinet: %s, %d commands", mn_name_, (int)commands_.size());
+            any_initialized = true;
+        } else {
+            ESP_LOGE(TAG, "Failed to find CN multinet model");
+        }
     }
 
-    multinet_ = esp_mn_handle_from_name(mn_name_);
-    multinet_model_data_ = multinet_->create(mn_name_, duration_);
-    multinet_->set_det_threshold(multinet_model_data_, threshold_);
-    esp_mn_commands_clear();
-    for (int i = 0; i < commands_.size(); i++) {
-        esp_mn_commands_add(i + 1, commands_[i].command.c_str());
+    // 初始化 EN 模型（alloc 会先清理 CN 的临时命令链表，但 CN 命令已通过 update 写入模型，安全）
+    if (!commands_en_.empty()) {
+        mn_en_name_ = esp_srmodel_filter(models_, ESP_MN_PREFIX, ESP_MN_ENGLISH);
+        if (mn_en_name_ != nullptr) {
+            multinet_en_ = esp_mn_handle_from_name(mn_en_name_);
+            multinet_en_data_ = multinet_en_->create(mn_en_name_, duration_);
+            multinet_en_->set_det_threshold(multinet_en_data_, threshold_);
+            esp_mn_commands_clear();
+            for (int i = 0; i < (int)commands_en_.size(); i++) {
+                esp_mn_commands_add(i + 1, commands_en_[i].command.c_str());
+            }
+            esp_mn_commands_update();
+            multinet_en_->print_active_speech_commands(multinet_en_data_);
+            ESP_LOGI(TAG, "EN multinet: %s, %d commands", mn_en_name_, (int)commands_en_.size());
+            any_initialized = true;
+        } else {
+            ESP_LOGE(TAG, "EN multinet not found — enable CONFIG_SR_MN_EN_MULTINET7_QUANT");
+            ESP_LOGI(TAG, "Please refer to https://pcn7cs20v8cr.feishu.cn/wiki/CpQjwQsCJiQSWSkYEvrcxcbVnwh to add custom wake word");
+        }
     }
-    esp_mn_commands_update();
-    
-    multinet_->print_active_speech_commands(multinet_model_data_);
-    return true;
+
+    return any_initialized;
 }
 
 void CustomWakeWord::OnWakeWordDetected(std::function<void(const std::string& wake_word)> callback) {
@@ -141,10 +182,25 @@ void CustomWakeWord::Stop() {
 
     std::lock_guard<std::mutex> lock(input_buffer_mutex_);
     input_buffer_.clear();
+    if (multinet_model_data_ != nullptr) {
+        multinet_->clean(multinet_model_data_);
+    }
+    if (multinet_en_data_ != nullptr) {
+        multinet_en_->clean(multinet_en_data_);
+    }
+}
+
+void CustomWakeWord::TriggerWakeWord(const std::string& text) {
+    last_detected_wake_word_ = text;
+    running_ = false;
+    input_buffer_.clear();
+    if (wake_word_detected_callback_) {
+        wake_word_detected_callback_(last_detected_wake_word_);
+    }
 }
 
 void CustomWakeWord::Feed(const std::vector<int16_t>& data) {
-    if (multinet_model_data_ == nullptr) {
+    if (multinet_model_data_ == nullptr && multinet_en_data_ == nullptr) {
         return;
     }
 
@@ -162,36 +218,62 @@ void CustomWakeWord::Feed(const std::vector<int16_t>& data) {
     } else {
         input_buffer_.insert(input_buffer_.end(), data.begin(), data.end());
     }
-    
-    int chunksize = multinet_->get_samp_chunksize(multinet_model_data_);
-    while (input_buffer_.size() >= chunksize) {
+
+    int cn_cs = multinet_model_data_ ? multinet_->get_samp_chunksize(multinet_model_data_) : 0;
+    int en_cs = multinet_en_data_ ? multinet_en_->get_samp_chunksize(multinet_en_data_) : 0;
+    int chunksize = std::max(cn_cs, en_cs);
+    if (chunksize == 0) return;
+
+    while (input_buffer_.size() >= (size_t)chunksize) {
         std::vector<int16_t> chunk(input_buffer_.begin(), input_buffer_.begin() + chunksize);
         StoreWakeWordData(chunk);
-        
-        esp_mn_state_t mn_state = multinet_->detect(multinet_model_data_, chunk.data());
-        
-        if (mn_state == ESP_MN_STATE_DETECTED) {
-            esp_mn_results_t *mn_result = multinet_->get_results(multinet_model_data_);
-            for (int i = 0; i < mn_result->num && running_; i++) {
-                ESP_LOGI(TAG, "Custom wake word detected: command_id=%d, string=%s, prob=%f", 
-                        mn_result->command_id[i], mn_result->string, mn_result->prob[i]);
-                auto& command = commands_[mn_result->command_id[i] - 1];
-                if (command.action == "wake") {
-                    last_detected_wake_word_ = command.text;
-                    running_ = false;
-                    input_buffer_.clear();
-                    
-                    if (wake_word_detected_callback_) {
-                        wake_word_detected_callback_(last_detected_wake_word_);
+
+        // CN 模型检测
+        if (multinet_model_data_ != nullptr) {
+            esp_mn_state_t mn_state = multinet_->detect(multinet_model_data_, chunk.data());
+            if (mn_state == ESP_MN_STATE_DETECTED) {
+                esp_mn_results_t* mn_result = multinet_->get_results(multinet_model_data_);
+                for (int i = 0; i < mn_result->num && running_; i++) {
+                    int idx = mn_result->command_id[i] - 1;
+                    ESP_LOGI(TAG, "CN wake word detected: command_id=%d, string=%s, prob=%f",
+                            mn_result->command_id[i], mn_result->string, mn_result->prob[i]);
+                    if (idx >= 0 && idx < (int)commands_.size() && commands_[idx].action == "wake") {
+                        TriggerWakeWord(commands_[idx].text);
+                        break;
                     }
                 }
+                multinet_->clean(multinet_model_data_);
+            } else if (mn_state == ESP_MN_STATE_TIMEOUT) {
+                ESP_LOGD(TAG, "CN command word detection timeout, cleaning state");
+                multinet_->clean(multinet_model_data_);
             }
-            multinet_->clean(multinet_model_data_);
-        } else if (mn_state == ESP_MN_STATE_TIMEOUT) {
-            ESP_LOGD(TAG, "Command word detection timeout, cleaning state");
-            multinet_->clean(multinet_model_data_);
         }
-        
+
+        if (!running_) {
+            break;
+        }
+
+        // EN 模型检测
+        if (multinet_en_data_ != nullptr) {
+            esp_mn_state_t mn_state = multinet_en_->detect(multinet_en_data_, chunk.data());
+            if (mn_state == ESP_MN_STATE_DETECTED) {
+                esp_mn_results_t* mn_result = multinet_en_->get_results(multinet_en_data_);
+                for (int i = 0; i < mn_result->num && running_; i++) {
+                    int idx = mn_result->command_id[i] - 1;
+                    ESP_LOGI(TAG, "EN wake word detected: command_id=%d, string=%s, prob=%f",
+                            mn_result->command_id[i], mn_result->string, mn_result->prob[i]);
+                    if (idx >= 0 && idx < (int)commands_en_.size() && commands_en_[idx].action == "wake") {
+                        TriggerWakeWord(commands_en_[idx].text);
+                        break;
+                    }
+                }
+                multinet_en_->clean(multinet_en_data_);
+            } else if (mn_state == ESP_MN_STATE_TIMEOUT) {
+                ESP_LOGD(TAG, "EN command word detection timeout, cleaning state");
+                multinet_en_->clean(multinet_en_data_);
+            }
+        }
+
         if (!running_) {
             break;
         }
@@ -200,10 +282,9 @@ void CustomWakeWord::Feed(const std::vector<int16_t>& data) {
 }
 
 size_t CustomWakeWord::GetFeedSize() {
-    if (multinet_model_data_ == nullptr) {
-        return 0;
-    }
-    return multinet_->get_samp_chunksize(multinet_model_data_);
+    int cn = multinet_model_data_ ? multinet_->get_samp_chunksize(multinet_model_data_) : 0;
+    int en = multinet_en_data_ ? multinet_en_->get_samp_chunksize(multinet_en_data_) : 0;
+    return (size_t)std::max(cn, en);
 }
 
 void CustomWakeWord::StoreWakeWordData(const std::vector<int16_t>& data) {
