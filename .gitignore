@@ -1,6 +1,9 @@
 tmp/
 components/
-managed_components/
+managed_components/**
+!managed_components/espressif__esp-sr/
+!managed_components/espressif__esp-sr/src/
+!managed_components/espressif__esp-sr/src/esp_mn_speech_commands.c
 build/
 dist/
 .vscode/
